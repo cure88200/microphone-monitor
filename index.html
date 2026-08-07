@@ -57,9 +57,12 @@
             audio: {
               echoCancellation: false,
               noiseSuppression: false,
-              autoGainControl: false
+              autoGainControl: false,
+              channelCount: 1, // モノラルに固定して処理を軽くする
+              latency: 0.0     // ブラウザに最小の遅延を要求する
             }
           });
+
 
           const source = audioCtx.createMediaStreamSource(stream);
           source.connect(audioCtx.destination);
