@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Low Latency Mic Monitor</title>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background-color: #222;
+      font-family: sans-serif;
+    }
+    #monitorBtn {
+      padding: 20px 40px;
+      font-size: 24px;
+      border-radius: 50px;
+      border: none;
+      background-color: #ff4757;
+      color: white;
+      cursor: pointer;
+      font-weight: bold;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+      transition: 0.3s;
+    }
+    #monitorBtn.active {
+      background-color: #2ed573;
+    }
+  </style>
+</head>
+<body>
+  <button id="monitorBtn">Start Monitor</button>
+
+  <script>
+    let audioCtx;
+    let stream;
+    let isPlaying = false;
+    const btn = document.getElementById('monitorBtn');
+
+    btn.addEventListener('click', async () => {
+      if (isPlaying) {
+        // 停止処理
+        if (stream) stream.getTracks().forEach(track => track.stop());
+        if (audioCtx) await audioCtx.close();
+        audioCtx = null;
+        btn.textContent = 'Start Monitor';
+        btn.classList.remove('active');
+        isPlaying = false;
+      } else {
+        try {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+          
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false
+            }
+          });
+
+          const source = audioCtx.createMediaStreamSource(stream);
+          source.connect(audioCtx.destination);
+
+          btn.textContent = 'Stop Monitor';
+          btn.classList.add('active');
+          isPlaying = true;
+        } catch (err) {
+          alert('マイクのアクセス許可してね: ' + err.message);
+        }
+      }
+    });
+  </script>
+</body>
+</html>
