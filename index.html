@@ -11,7 +11,6 @@
       --text: #f8fafc;
       --text-muted: #94a3b8;
       --primary: #06b6d4;
-      --primary-active: #0891b2;
       --danger: #ef4444;
       --meter-bg: #334155;
       --meter-active: #10b981;
@@ -64,7 +63,6 @@
       margin-top: 4px;
     }
 
-    /* レベルメーター */
     .meter-container {
       width: 100%;
       height: 8px;
@@ -80,7 +78,6 @@
       transition: width 50ms ease-out;
     }
 
-    /* メインボタン */
     .toggle-btn {
       width: 100%;
       padding: 16px;
@@ -106,7 +103,6 @@
       background-color: var(--danger);
     }
 
-    /* ボリューム調整 */
     .control-group {
       display: flex;
       flex-direction: column;
@@ -126,11 +122,12 @@
       cursor: pointer;
     }
 
-    .warning {
+    .status-msg {
       font-size: 0.75rem;
       color: var(--text-muted);
       text-align: center;
       line-height: 1.4;
+      min-height: 1.2em;
     }
   </style>
 </head>
@@ -142,17 +139,14 @@
       <p>Low Latency Direct Loopback</p>
     </div>
 
-    <!-- レベルメーター -->
     <div class="meter-container">
       <div class="meter-bar" id="meterBar"></div>
     </div>
 
-    <!-- スタート/ストップ -->
     <button class="toggle-btn" id="toggleBtn">
       <span>Start Monitoring</span>
     </button>
 
-    <!-- ボリュームスライダー -->
     <div class="control-group">
       <div class="control-header">
         <span>Volume</span>
@@ -161,9 +155,7 @@
       <input type="range" id="gainSlider" min="0" max="200" value="100">
     </div>
 
-    <p class="warning">
-      ※必ずイヤホン・ヘッドホンを接続してご使用ください。
-    </p>
+    <p class="status-msg" id="statusMsg">※必ずイヤホン・ヘッドホンを接続してください</p>
   </div>
 
   <script>
@@ -179,33 +171,43 @@
     const gainSlider = document.getElementById('gainSlider');
     const gainValue = document.getElementById('gainValue');
     const meterBar = document.getElementById('meterBar');
+    const statusMsg = document.getElementById('statusMsg');
+
+    async function getMicrophoneStream() {
+      // 1. 低遅延用パラメータで取得試行
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          },
+          video: false
+        });
+      } catch (e) {
+        console.warn('Strict constraints failed, fallback to default audio', e);
+      }
+
+      // 2. 失敗した場合は標準設定でフォールバック取得
+      return await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false
+      });
+    }
 
     async function startMonitoring() {
       try {
-        // 1. 低遅延モードでAudioContextを生成
+        statusMsg.textContent = 'マイク初期化中...';
+
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
 
-        // iOS Safari対策: サスペンド解除
         if (audioCtx.state === 'suspended') {
           await audioCtx.resume();
         }
 
-        // 2. DSP（ブラウザ側のエコー・ノイズ処理）を全停止して遅延を極小化
-        const constraints = {
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            channelCount: 1,
-            latency: 0
-          },
-          video: false
-        };
+        micStream = await getMicrophoneStream();
 
-        micStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-        // 3. ルーティング構築: mic -> gain -> destination (最短経路)
         sourceNode = audioCtx.createMediaStreamSource(micStream);
         gainNode = audioCtx.createGain();
         analyserNode = audioCtx.createAnalyser();
@@ -217,22 +219,30 @@
         gainNode.connect(analyserNode);
         gainNode.connect(audioCtx.destination);
 
-        // 画面常時点灯（Wake Lock API対応環境のみ）
         if ('wakeLock' in navigator) {
           try {
             await navigator.wakeLock.request('screen');
-          } catch (e) {
-            // Wake Lock 非対応/失敗時は無視
-          }
+          } catch (_) {}
         }
 
         isRunning = true;
         toggleBtn.classList.add('running');
         toggleBtn.querySelector('span').textContent = 'Stop Monitoring';
+        statusMsg.textContent = 'モニタリング中（イヤホン推奨）';
         updateMeter();
 
       } catch (err) {
-        alert('マイクの取得に失敗しました: ' + err.message);
+        console.error(err);
+        let msg = `エラー [${err.name}]: `;
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          msg += 'マイクの利用が拒否されています。ブラウザ・端末の設定で許可してください。';
+        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          msg += 'マイクが見つかりませんでした。';
+        } else {
+          msg += err.message || 'マイクの起動に失敗しました。';
+        }
+        alert(msg);
+        statusMsg.textContent = msg;
         stopMonitoring();
       }
     }
@@ -241,6 +251,7 @@
       isRunning = false;
       toggleBtn.classList.remove('running');
       toggleBtn.querySelector('span').textContent = 'Start Monitoring';
+      statusMsg.textContent = '※必ずイヤホン・ヘッドホンを接続してください';
 
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
@@ -266,7 +277,6 @@
       }
     }
 
-    // レベルメーター描画
     function updateMeter() {
       if (!isRunning || !analyserNode) return;
 
@@ -285,7 +295,6 @@
       animationFrameId = requestAnimationFrame(updateMeter);
     }
 
-    // イベントリスナー
     toggleBtn.addEventListener('click', () => {
       if (isRunning) {
         stopMonitoring();
