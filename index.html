@@ -2,314 +2,122 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Voice Monitor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ultra-Low Latency Monitor</title>
   <style>
-    :root {
-      --bg: #0f172a;
-      --card: #1e293b;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --primary: #06b6d4;
-      --danger: #ef4444;
-      --meter-bg: #334155;
-      --meter-active: #10b981;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      -webkit-tap-highlight-color: transparent;
-    }
-
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background-color: var(--bg);
-      color: var(--text);
+      background: #0f172a;
+      color: #f8fafc;
+      font-family: sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-      padding: 24px;
+      gap: 16px;
+      padding: 20px;
     }
-
-    .container {
+    button {
       width: 100%;
-      max-width: 380px;
-      background: var(--card);
-      border-radius: 20px;
-      padding: 28px 24px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-      display: flex;
-      flex-direction: column;
-      gap: 24px;
-    }
-
-    .header {
-      text-align: center;
-    }
-
-    .header h1 {
-      font-size: 1.25rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-    }
-
-    .header p {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      margin-top: 4px;
-    }
-
-    .meter-container {
-      width: 100%;
-      height: 8px;
-      background: var(--meter-bg);
-      border-radius: 4px;
-      overflow: hidden;
-    }
-
-    .meter-bar {
-      width: 0%;
-      height: 100%;
-      background: var(--meter-active);
-      transition: width 50ms ease-out;
-    }
-
-    .toggle-btn {
-      width: 100%;
+      max-width: 320px;
       padding: 16px;
-      font-size: 1.1rem;
-      font-weight: 600;
-      color: #fff;
-      background-color: var(--primary);
+      font-size: 1rem;
+      font-weight: bold;
       border: none;
-      border-radius: 12px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      transition: background-color 0.15s, transform 0.05s;
-    }
-
-    .toggle-btn:active {
-      transform: scale(0.98);
-    }
-
-    .toggle-btn.running {
-      background-color: var(--danger);
-    }
-
-    .control-group {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .control-header {
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.85rem;
-      color: var(--text-muted);
-    }
-
-    input[type="range"] {
-      width: 100%;
-      accent-color: var(--primary);
+      border-radius: 10px;
       cursor: pointer;
     }
-
-    .status-msg {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      text-align: center;
-      line-height: 1.4;
-      min-height: 1.2em;
-    }
+    .btn-webaudio { background: #06b6d4; color: #fff; }
+    .btn-audio-tag { background: #8b5cf6; color: #fff; }
+    .btn-stop { background: #ef4444; color: #fff; }
+    .status { font-size: 0.85rem; color: #94a3b8; }
   </style>
 </head>
 <body>
 
-  <div class="container">
-    <div class="header">
-      <h1>VOICE MONITOR</h1>
-      <p>Low Latency Direct Loopback</p>
-    </div>
+  <button id="btnWebAudio" class="btn-webaudio">Mode 1: Web Audio (直結 48kHz)</button>
+  <button id="btnAudioTag" class="btn-audio-tag">Mode 2: HTML5 Audio (直結)</button>
+  <button id="btnStop" class="btn-stop">STOP</button>
+  
+  <p class="status" id="statusText">停止中</p>
 
-    <div class="meter-container">
-      <div class="meter-bar" id="meterBar"></div>
-    </div>
-
-    <button class="toggle-btn" id="toggleBtn">
-      <span>Start Monitoring</span>
-    </button>
-
-    <div class="control-group">
-      <div class="control-header">
-        <span>Volume</span>
-        <span id="gainValue">100%</span>
-      </div>
-      <input type="range" id="gainSlider" min="0" max="200" value="100">
-    </div>
-
-    <p class="status-msg" id="statusMsg">※必ずイヤホン・ヘッドホンを接続してください</p>
-  </div>
+  <!-- Mode 2用の非表示audio要素 -->
+  <audio id="directAudio" autoplay playsinline></audio>
 
   <script>
     let audioCtx = null;
-    let micStream = null;
-    let sourceNode = null;
-    let gainNode = null;
-    let analyserNode = null;
-    let animationFrameId = null;
-    let isRunning = false;
+    let currentStream = null;
+    const directAudio = document.getElementById('directAudio');
+    const statusText = document.getElementById('statusText');
 
-    const toggleBtn = document.getElementById('toggleBtn');
-    const gainSlider = document.getElementById('gainSlider');
-    const gainValue = document.getElementById('gainValue');
-    const meterBar = document.getElementById('meterBar');
-    const statusMsg = document.getElementById('statusMsg');
+    const constraints = {
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+        latency: 0,
+        sampleRate: 48000
+      },
+      video: false
+    };
 
-    async function getMicrophoneStream() {
-      // 1. 低遅延用パラメータで取得試行
-      try {
-        return await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false
-          },
-          video: false
-        });
-      } catch (e) {
-        console.warn('Strict constraints failed, fallback to default audio', e);
-      }
-
-      // 2. 失敗した場合は標準設定でフォールバック取得
-      return await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false
-      });
-    }
-
-    async function startMonitoring() {
-      try {
-        statusMsg.textContent = 'マイク初期化中...';
-
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
-
-        if (audioCtx.state === 'suspended') {
-          await audioCtx.resume();
-        }
-
-        micStream = await getMicrophoneStream();
-
-        sourceNode = audioCtx.createMediaStreamSource(micStream);
-        gainNode = audioCtx.createGain();
-        analyserNode = audioCtx.createAnalyser();
-        analyserNode.fftSize = 64;
-
-        gainNode.gain.setValueAtTime(gainSlider.value / 100, audioCtx.currentTime);
-
-        sourceNode.connect(gainNode);
-        gainNode.connect(analyserNode);
-        gainNode.connect(audioCtx.destination);
-
-        if ('wakeLock' in navigator) {
-          try {
-            await navigator.wakeLock.request('screen');
-          } catch (_) {}
-        }
-
-        isRunning = true;
-        toggleBtn.classList.add('running');
-        toggleBtn.querySelector('span').textContent = 'Stop Monitoring';
-        statusMsg.textContent = 'モニタリング中（イヤホン推奨）';
-        updateMeter();
-
-      } catch (err) {
-        console.error(err);
-        let msg = `エラー [${err.name}]: `;
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          msg += 'マイクの利用が拒否されています。ブラウザ・端末の設定で許可してください。';
-        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-          msg += 'マイクが見つかりませんでした。';
-        } else {
-          msg += err.message || 'マイクの起動に失敗しました。';
-        }
-        alert(msg);
-        statusMsg.textContent = msg;
-        stopMonitoring();
-      }
-    }
-
-    function stopMonitoring() {
-      isRunning = false;
-      toggleBtn.classList.remove('running');
-      toggleBtn.querySelector('span').textContent = 'Start Monitoring';
-      statusMsg.textContent = '※必ずイヤホン・ヘッドホンを接続してください';
-
-      if (animationFrameId) {
-        cancelAnimationFrame(animationFrameId);
-        animationFrameId = null;
-      }
-      meterBar.style.width = '0%';
-
-      if (sourceNode) {
-        sourceNode.disconnect();
-        sourceNode = null;
-      }
-      if (gainNode) {
-        gainNode.disconnect();
-        gainNode = null;
-      }
-      if (micStream) {
-        micStream.getTracks().forEach(track => track.stop());
-        micStream = null;
+    function cleanup() {
+      if (currentStream) {
+        currentStream.getTracks().forEach(t => t.stop());
+        currentStream = null;
       }
       if (audioCtx) {
         audioCtx.close();
         audioCtx = null;
       }
+      directAudio.srcObject = null;
+      statusText.textContent = "停止中";
     }
 
-    function updateMeter() {
-      if (!isRunning || !analyserNode) return;
+    // Mode 1: Web Audio API (直結)
+    document.getElementById('btnWebAudio').addEventListener('click', async () => {
+      cleanup();
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        
+        // 48kHz固定 + latencyHint: 0 (最小バッファ要求)
+        audioCtx = new AudioContextClass({
+          latencyHint: 0,
+          sampleRate: 48000
+        });
 
-      const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
-      analyserNode.getByteTimeDomainData(dataArray);
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+        }
 
-      let maxVal = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        const val = Math.abs(dataArray[i] - 128);
-        if (val > maxVal) maxVal = val;
-      }
+        currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+        const source = audioCtx.createMediaStreamSource(currentStream);
+        
+        // 中間ノードを一切挟まず直結
+        source.connect(audioCtx.destination);
 
-      const percent = Math.min(100, Math.round((maxVal / 128) * 100 * 2));
-      meterBar.style.width = `${percent}%`;
-
-      animationFrameId = requestAnimationFrame(updateMeter);
-    }
-
-    toggleBtn.addEventListener('click', () => {
-      if (isRunning) {
-        stopMonitoring();
-      } else {
-        startMonitoring();
+        statusText.textContent = `Web Audio 動作中 (BaseLatency: ${(audioCtx.baseLatency * 1000).toFixed(1)}ms / SampleRate: ${audioCtx.sampleRate}Hz)`;
+      } catch (e) {
+        alert(e.message);
       }
     });
 
-    gainSlider.addEventListener('input', (e) => {
-      const val = e.target.value;
-      gainValue.textContent = `${val}%`;
-      if (gainNode && audioCtx) {
-        gainNode.gain.setValueAtTime(val / 100, audioCtx.currentTime);
+    // Mode 2: HTML5 Audio 直結
+    document.getElementById('btnAudioTag').addEventListener('click', async () => {
+      cleanup();
+      try {
+        currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+        directAudio.srcObject = currentStream;
+        await directAudio.play();
+        statusText.textContent = "HTML5 Audio 直結 動作中";
+      } catch (e) {
+        alert(e.message);
       }
     });
+
+    document.getElementById('btnStop').addEventListener('click', cleanup);
   </script>
 </body>
 </html>
+
