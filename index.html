@@ -2,77 +2,303 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Low Latency Mic Monitor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Voice Monitor</title>
   <style>
-    body {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #06b6d4;
+      --primary-active: #0891b2;
+      --danger: #ef4444;
+      --meter-bg: #334155;
+      --meter-active: #10b981;
+    }
+
+    * {
+      box-sizing: border-box;
       margin: 0;
-      background-color: #222;
-      font-family: sans-serif;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
     }
-    #monitorBtn {
-      padding: 20px 40px;
-      font-size: 24px;
-      border-radius: 50px;
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 380px;
+      background: var(--card);
+      border-radius: 20px;
+      padding: 28px 24px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .header {
+      text-align: center;
+    }
+
+    .header h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+
+    .header p {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* レベルメーター */
+    .meter-container {
+      width: 100%;
+      height: 8px;
+      background: var(--meter-bg);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .meter-bar {
+      width: 0%;
+      height: 100%;
+      background: var(--meter-active);
+      transition: width 50ms ease-out;
+    }
+
+    /* メインボタン */
+    .toggle-btn {
+      width: 100%;
+      padding: 16px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #fff;
+      background-color: var(--primary);
       border: none;
-      background-color: #ff4757;
-      color: white;
+      border-radius: 12px;
       cursor: pointer;
-      font-weight: bold;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-      transition: 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: background-color 0.15s, transform 0.05s;
     }
-    #monitorBtn.active {
-      background-color: #2ed573;
+
+    .toggle-btn:active {
+      transform: scale(0.98);
+    }
+
+    .toggle-btn.running {
+      background-color: var(--danger);
+    }
+
+    /* ボリューム調整 */
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .control-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+
+    .warning {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-align: center;
+      line-height: 1.4;
     }
   </style>
 </head>
 <body>
-  <button id="monitorBtn">Start Monitor</button>
+
+  <div class="container">
+    <div class="header">
+      <h1>VOICE MONITOR</h1>
+      <p>Low Latency Direct Loopback</p>
+    </div>
+
+    <!-- レベルメーター -->
+    <div class="meter-container">
+      <div class="meter-bar" id="meterBar"></div>
+    </div>
+
+    <!-- スタート/ストップ -->
+    <button class="toggle-btn" id="toggleBtn">
+      <span>Start Monitoring</span>
+    </button>
+
+    <!-- ボリュームスライダー -->
+    <div class="control-group">
+      <div class="control-header">
+        <span>Volume</span>
+        <span id="gainValue">100%</span>
+      </div>
+      <input type="range" id="gainSlider" min="0" max="200" value="100">
+    </div>
+
+    <p class="warning">
+      ※必ずイヤホン・ヘッドホンを接続してご使用ください。
+    </p>
+  </div>
 
   <script>
-    let audioCtx;
-    let stream;
-    let isPlaying = false;
-    const btn = document.getElementById('monitorBtn');
+    let audioCtx = null;
+    let micStream = null;
+    let sourceNode = null;
+    let gainNode = null;
+    let analyserNode = null;
+    let animationFrameId = null;
+    let isRunning = false;
 
-    btn.addEventListener('click', async () => {
-      if (isPlaying) {
-        // 停止処理
-        if (stream) stream.getTracks().forEach(track => track.stop());
-        if (audioCtx) await audioCtx.close();
-        audioCtx = null;
-        btn.textContent = 'Start Monitor';
-        btn.classList.remove('active');
-        isPlaying = false;
-      } else {
-        try {
-          audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
-          
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false,
-              channelCount: 1, // モノラルに固定して処理を軽くする
-              latency: 0.0     // ブラウザに最小の遅延を要求する
-            }
-          });
+    const toggleBtn = document.getElementById('toggleBtn');
+    const gainSlider = document.getElementById('gainSlider');
+    const gainValue = document.getElementById('gainValue');
+    const meterBar = document.getElementById('meterBar');
 
+    async function startMonitoring() {
+      try {
+        // 1. 低遅延モードでAudioContextを生成
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
 
-          const source = audioCtx.createMediaStreamSource(stream);
-          source.connect(audioCtx.destination);
-
-          btn.textContent = 'Stop Monitor';
-          btn.classList.add('active');
-          isPlaying = true;
-        } catch (err) {
-          alert('マイクのアクセス許可してね: ' + err.message);
+        // iOS Safari対策: サスペンド解除
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
         }
+
+        // 2. DSP（ブラウザ側のエコー・ノイズ処理）を全停止して遅延を極小化
+        const constraints = {
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
+            latency: 0
+          },
+          video: false
+        };
+
+        micStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+        // 3. ルーティング構築: mic -> gain -> destination (最短経路)
+        sourceNode = audioCtx.createMediaStreamSource(micStream);
+        gainNode = audioCtx.createGain();
+        analyserNode = audioCtx.createAnalyser();
+        analyserNode.fftSize = 64;
+
+        gainNode.gain.setValueAtTime(gainSlider.value / 100, audioCtx.currentTime);
+
+        sourceNode.connect(gainNode);
+        gainNode.connect(analyserNode);
+        gainNode.connect(audioCtx.destination);
+
+        // 画面常時点灯（Wake Lock API対応環境のみ）
+        if ('wakeLock' in navigator) {
+          try {
+            await navigator.wakeLock.request('screen');
+          } catch (e) {
+            // Wake Lock 非対応/失敗時は無視
+          }
+        }
+
+        isRunning = true;
+        toggleBtn.classList.add('running');
+        toggleBtn.querySelector('span').textContent = 'Stop Monitoring';
+        updateMeter();
+
+      } catch (err) {
+        alert('マイクの取得に失敗しました: ' + err.message);
+        stopMonitoring();
+      }
+    }
+
+    function stopMonitoring() {
+      isRunning = false;
+      toggleBtn.classList.remove('running');
+      toggleBtn.querySelector('span').textContent = 'Start Monitoring';
+
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+      meterBar.style.width = '0%';
+
+      if (sourceNode) {
+        sourceNode.disconnect();
+        sourceNode = null;
+      }
+      if (gainNode) {
+        gainNode.disconnect();
+        gainNode = null;
+      }
+      if (micStream) {
+        micStream.getTracks().forEach(track => track.stop());
+        micStream = null;
+      }
+      if (audioCtx) {
+        audioCtx.close();
+        audioCtx = null;
+      }
+    }
+
+    // レベルメーター描画
+    function updateMeter() {
+      if (!isRunning || !analyserNode) return;
+
+      const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+      analyserNode.getByteTimeDomainData(dataArray);
+
+      let maxVal = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const val = Math.abs(dataArray[i] - 128);
+        if (val > maxVal) maxVal = val;
+      }
+
+      const percent = Math.min(100, Math.round((maxVal / 128) * 100 * 2));
+      meterBar.style.width = `${percent}%`;
+
+      animationFrameId = requestAnimationFrame(updateMeter);
+    }
+
+    // イベントリスナー
+    toggleBtn.addEventListener('click', () => {
+      if (isRunning) {
+        stopMonitoring();
+      } else {
+        startMonitoring();
+      }
+    });
+
+    gainSlider.addEventListener('input', (e) => {
+      const val = e.target.value;
+      gainValue.textContent = `${val}%`;
+      if (gainNode && audioCtx) {
+        gainNode.gain.setValueAtTime(val / 100, audioCtx.currentTime);
       }
     });
   </script>
